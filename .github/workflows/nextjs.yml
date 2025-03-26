@@ -33,6 +33,9 @@ jobs:
       - name: Build the project
         run: yarn build
 
+      - name: Apply transform.sh to index.html
+        run: bash ./transform.sh ./out/index.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
