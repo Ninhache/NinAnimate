@@ -2,82 +2,79 @@
 
 import type React from "react";
 
-import { Button } from "@/components/ui/button";
-import { diffLines } from "diff";
-import { Edit, Play } from "lucide-react";
-import Prism from "prismjs";
-import { useEffect, useMemo, useRef, useState } from "react";
-import CodeAnimate from "./animate-code";
+import { useEffect, useRef, useState } from "react";
+import { ShikiMagicMove } from "shiki-magic-move/react";
+import type { HighlighterCore } from "shiki/core";
+import {
+  getHighlighter,
+  SHIKI_LANG,
+  SHIKI_THEME,
+} from "./shiki-highlighter";
 
-import "prismjs/components/prism-typescript";
+import "shiki-magic-move/dist/style.css";
 
 type CodeEditorProps = {
   code: string;
+  /**
+   * Reserved for future multi-language support. The app currently forces
+   * TypeScript everywhere, so only the TS grammar is loaded into Shiki.
+   */
   language: string;
   onChange: (code: string) => void;
-  nextCode?: string;
-  currentStep: number;
-  totalSteps: number;
-  onStepComplete: () => void;
   enableDoubleClickEdit?: boolean;
+  /** Font size (px) for the code, driven by the zoom controls. */
+  fontSizePx?: number;
 };
+
+/**
+ * Tuning for the "magic move" transition that plays whenever `code` changes
+ * (i.e. when the user navigates between slides). Tokens that exist in both
+ * the old and new code glide to their new position; brand-new tokens fade in
+ * and removed ones fade out, instead of whole lines popping in and out.
+ *
+ * See MagicMoveRenderOptions / MagicMoveDifferOptions in shiki-magic-move.
+ */
+const MAGIC_MOVE_OPTIONS = {
+  duration: 800,
+  // Per-token delay (ms) so changes ripple across the snippet rather than
+  // every token moving in perfect lockstep.
+  stagger: 3,
+  lineNumbers: false,
+  // Keep our own dark container background instead of the theme's so the
+  // editor blends with the surrounding gray-950 chrome.
+  containerStyle: false,
+  // Better identity matching for tokens with identical content.
+  enhanceMatching: true,
+  easing: "ease-in-out",
+} as const;
 
 export default function CodeEditor({
   code,
-  language,
   onChange,
-  nextCode,
-  currentStep,
-  totalSteps,
-  onStepComplete,
   enableDoubleClickEdit = false,
+  fontSizePx,
 }: CodeEditorProps) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [displayedCode, setDisplayedCode] = useState(code);
-  const [animationProgress, setAnimationProgress] = useState(0);
-  const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [highlighter, setHighlighter] = useState<HighlighterCore | null>(null);
 
   // Normalize tabs to spaces to ensure consistent spacing
   const normalizeCode = (codeString: string) => {
     return codeString.replace(/\t/g, "  ");
   };
 
-  const grammar = useMemo(() => {
-    const languageMap: Record<string, keyof typeof Prism.languages> = {
-      typescript: "typescript",
-    };
-    const prismLanguage = languageMap[language] || "javascript";
-    return Prism.languages[prismLanguage] || Prism.languages.javascript;
-  }, [language]);
-
-  const interpolatedCode = useMemo(() => {
-    if (!nextCode || currentStep === 0) return normalizeCode(code);
-
-    // If we're at the final step, show the target code
-    if (currentStep === totalSteps) {
-      return normalizeCode(nextCode);
-    }
-
-    // For intermediate steps, do a crude diff-based partial interpolation (yes i still don't care)
-    const diff = diffLines(normalizeCode(code), normalizeCode(nextCode));
-    let result = "";
-
-    diff.forEach((part) => {
-      if (!part.added && !part.removed) {
-        // Unchanged parts are always included
-        result += part.value;
-      } else if (part.removed && animationProgress < 0.5) {
-        // Show removed parts in the first half of the animation
-        result += part.value;
-      } else if (part.added && animationProgress > 0.5) {
-        // Show added parts in the second half of the animation
-        result += part.value;
-      }
+  // Load the shared Shiki highlighter once. It's async (grammar + theme),
+  // so until it resolves we fall back to plain, unhighlighted text.
+  useEffect(() => {
+    let active = true;
+    getHighlighter().then((hl) => {
+      if (active) setHighlighter(hl);
     });
-
-    return result;
-  }, [code, nextCode, currentStep, totalSteps, animationProgress]);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isEditing) {
@@ -85,101 +82,10 @@ export default function CodeEditor({
     }
   }, [code, isEditing]);
 
-  useEffect(() => {
-    if (currentStep > 0 && nextCode) {
-      if (animationTimerRef.current) {
-        clearTimeout(animationTimerRef.current);
-      }
-
-      setAnimationProgress(0);
-
-      const animationDuration = 1500; // ms
-      const interval = 50; // ms
-      const steps = animationDuration / interval;
-
-      let step = 0;
-      animationTimerRef.current = setInterval(() => {
-        step++;
-        const progress = step / steps;
-        setAnimationProgress(progress);
-
-        if (progress >= 1) {
-          if (animationTimerRef.current) {
-            clearInterval(animationTimerRef.current);
-          }
-          onStepComplete();
-        }
-      }, interval);
-    }
-
-    return () => {
-      if (animationTimerRef.current) {
-        clearInterval(animationTimerRef.current);
-      }
-    };
-  }, [currentStep, nextCode, onStepComplete]);
-
   const handleCodeChange = (e: React.FormEvent<HTMLTextAreaElement>) => {
     const newCode = e.currentTarget.value;
     setDisplayedCode(newCode);
     onChange(newCode);
-  };
-
-  // Custom function to get keys for lines that helps with variable name changes
-  const getCustomKey = (line: string) => {
-    const trimmed = line.trimStart();
-
-    // For variable declarations, use everything except the variable name
-    if (
-      trimmed.startsWith("const ") ||
-      trimmed.startsWith("let ") ||
-      trimmed.startsWith("var ") ||
-      trimmed.startsWith("type ")
-    ) {
-      const parts = trimmed.split("=");
-      if (parts.length > 1) {
-        // Return the right side of the assignment as the key
-        return parts.slice(1).join("=").trim();
-      }
-    }
-
-    // For function declarations, use the function body as the key
-    if (trimmed.startsWith("function ")) {
-      const bodyStart = trimmed.indexOf("{");
-      if (bodyStart > 0) {
-        return trimmed.substring(bodyStart);
-      }
-    }
-
-    // Or default to the trimmed line
-    return trimmed;
-  };
-
-  // Decide if a line is "special" (variable / function declarations / ...)
-  const checkSpecialLine = (line: string) => {
-    const trimmed = line.trimStart();
-    return (
-      trimmed.startsWith("const ") ||
-      trimmed.startsWith("let ") ||
-      trimmed.startsWith("var ") ||
-      trimmed.startsWith("function ") ||
-      trimmed.startsWith("type ")
-    );
-  };
-
-  const renderSpecialLine = ({ line }: { line: string }) => {
-    const highlighted = Prism.highlight(line, grammar, language);
-    return (
-      <pre
-        key={line}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-        className="special-line"
-        style={{
-          transition: "all 0.3s ease-in-out",
-          position: "relative",
-        }}
-      />
-    );
   };
 
   /**
@@ -256,6 +162,7 @@ export default function CodeEditor({
   return (
     <div
       className="w-full h-full overflow-auto rounded-md bg-gray-950 text-white font-mono text-sm relative"
+      style={{ fontSize: fontSizePx ? `${fontSizePx}px` : undefined }}
       onDoubleClick={
         enableDoubleClickEdit ? () => setIsEditing(true) : undefined
       }
@@ -285,37 +192,19 @@ export default function CodeEditor({
         />
       ) : (
         <div className="relative w-full h-full p-4">
-          <CodeAnimate
-            value={interpolatedCode}
-            grammar={grammar}
-            language={language}
-            animationEnabled={currentStep > 0}
-            animationOptions={{
-              duration: 300,
-              easing: "ease-in-out",
-              disrespectUserMotionPreference: true,
-            }}
-            getKey={getCustomKey}
-            checkSpecialLine={checkSpecialLine}
-            renderSpecialLine={renderSpecialLine}
-            maxAnchor={20}
-            innerProps={{
-              className: "code-preview",
-              style: {
-                display: "block",
-                fontFamily:
-                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                fontSize: "0.875rem",
-                lineHeight: 1.5,
-                tabSize: 2,
-              },
-            }}
-          />
-
-          {currentStep > 0 && (
-            <div className="absolute top-2 right-2 bg-gray-800 px-2 py-1 rounded text-xs">
-              Step {currentStep} of {totalSteps}
-            </div>
+          {highlighter ? (
+            <ShikiMagicMove
+              highlighter={highlighter}
+              lang={SHIKI_LANG}
+              theme={SHIKI_THEME}
+              code={normalizeCode(code)}
+              options={MAGIC_MOVE_OPTIONS}
+              className="code-preview"
+            />
+          ) : (
+            // Pre-highlighter fallback: render the raw code so there's no
+            // flash of empty space while the grammar/theme load.
+            <pre className="code-preview">{normalizeCode(code)}</pre>
           )}
         </div>
       )}
