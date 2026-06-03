@@ -11,11 +11,27 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCcw,
   Upload,
+  Video,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import CodeEditor from "./code-editor";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import SlidePanel from "./slide-panel";
+
+// Load the editor client-side only. It pulls in Shiki (and its ESM-only
+// dependency tree) for the magic-move animation, which must not enter the
+// server/prerender graph — doing so breaks the Next.js static export
+// (`output: "export"`). The whole tool is client-interactive anyway.
+const CodeEditor = dynamic(() => import("./code-editor"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full rounded-md bg-gray-950" aria-hidden />
+  ),
+});
 
 export type Slide = {
   id: string;
@@ -23,6 +39,15 @@ export type Slide = {
   code: string;
   language: string;
 };
+
+// Zoom (code font size) bounds and step.
+const FONT_MIN = 8;
+const FONT_MAX = 48;
+const FONT_DEFAULT = 14; // == the old 0.875rem
+const FONT_STEP = 0.1; // 10% per click / wheel notch
+const FONT_STORAGE_KEY = "ninanimate-fontsize";
+const clampFont = (px: number) =>
+  Math.round(Math.max(FONT_MIN, Math.min(FONT_MAX, px)));
 
 // Default TypeScript code for new slides when no slides exist
 const DEFAULT_TS_CODE = `// TypeScript Example
@@ -34,29 +59,70 @@ const user: string = "World";
 console.log(greet(user));`;
 
 export default function CodeAnimationSlides() {
+  // Seed slides tell a small refactoring story so each transition showcases a
+  // different "magic move" effect: parens expanding for new params, type
+  // annotations fading in, a for-loop morphing into `.reduce`, and finally an
+  // extraction/rename. Edit any slide by double-clicking it.
   const [slides, setSlides] = useState<Slide[]>([
     {
       id: "1",
-      title: "Initial Setup",
-      code: "function hello(): void {\n  console.log('Hello, world!');\n}",
+      title: "1 · Naive implementation",
+      code: "function total(items) {\n  let result = 0;\n  for (let i = 0; i < items.length; i++) {\n    result += items[i].price;\n  }\n  return result;\n}",
       language: "typescript",
     },
     {
       id: "2",
-      title: "Add Parameters",
-      code: "function hello(name: string): void {\n  console.log(`Hello, ${name}!`);\n}",
+      title: "2 · Add type safety",
+      code: "function total(items: Item[]): number {\n  let result = 0;\n  for (let i = 0; i < items.length; i++) {\n    result += items[i].price;\n  }\n  return result;\n}",
       language: "typescript",
     },
     {
       id: "3",
-      title: "Return Value",
-      code: "function hello(name: string): string {\n  return `Hello, ${name}!`;\n}",
+      title: "3 · Refactor to reduce",
+      code: "function total(items: Item[]): number {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}",
+      language: "typescript",
+    },
+    {
+      id: "4",
+      title: "4 · Add a discount",
+      code: "function total(items: Item[], discount: number): number {\n  return items.reduce((sum, item) => sum + item.price, 0) * (1 - discount);\n}",
+      language: "typescript",
+    },
+    {
+      id: "5",
+      title: "5 · Extract & compose",
+      code: "const subtotal = (items: Item[]): number =>\n  items.reduce((sum, item) => sum + item.price, 0);\n\nconst total = (items: Item[], discount: number): number =>\n  subtotal(items) * (1 - discount);",
       language: "typescript",
     },
   ]);
 
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // --- Zoom (code font size) ---
+  const [fontSizePx, setFontSizePx] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(FONT_STORAGE_KEY);
+      if (saved) return clampFont(Number(saved));
+    }
+    return FONT_DEFAULT;
+  });
+  const zoomIn = useCallback(
+    () => setFontSizePx((p) => clampFont(p * (1 + FONT_STEP))),
+    []
+  );
+  const zoomOut = useCallback(
+    () => setFontSizePx((p) => clampFont(p * (1 - FONT_STEP))),
+    []
+  );
+  const zoomReset = useCallback(() => setFontSizePx(FONT_DEFAULT), []);
+  const zoomPercent = Math.round((fontSizePx / FONT_DEFAULT) * 100);
+
+  // --- Video export (composed on a canvas, not a screen recording) ---
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Code area ref — surface for the Ctrl/Cmd + wheel zoom listener.
+  const codeAreaRef = useRef<HTMLDivElement>(null);
 
   const exportSlides = () => {
     const dataStr = JSON.stringify(slides, null, 2);
@@ -122,7 +188,6 @@ export default function CodeAnimationSlides() {
   };
 
   const currentSlide = slides[currentSlideIndex];
-  const nextSlide = slides[currentSlideIndex + 1];
 
   // Calculate total steps based on code complexity
   // useEffect(() => {
@@ -148,8 +213,48 @@ export default function CodeAnimationSlides() {
   //   }
   // }, [currentSlideIndex, currentSlide, nextSlide]);
 
+  // Persist the chosen zoom across reloads.
+  useEffect(() => {
+    window.localStorage.setItem(FONT_STORAGE_KEY, String(fontSizePx));
+  }, [fontSizePx]);
+
+  // Ctrl/Cmd + wheel over the code zooms (instead of scrolling/page-zoom).
+  // React's onWheel is passive and can't preventDefault, so attach natively.
+  useEffect(() => {
+    const el = codeAreaRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) zoomIn();
+        else zoomOut();
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomIn, zoomOut]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Zoom shortcuts work in any mode; block the native browser zoom.
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === "=" || e.key === "+") {
+          e.preventDefault();
+          zoomIn();
+          return;
+        }
+        if (e.key === "-") {
+          e.preventDefault();
+          zoomOut();
+          return;
+        }
+        if (e.key === "0") {
+          e.preventDefault();
+          zoomReset();
+          return;
+        }
+      }
+
       if (isPlaying) {
         if (e.key === "ArrowRight" || e.key === " ") {
           e.preventDefault();
@@ -171,7 +276,7 @@ export default function CodeAnimationSlides() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isPlaying, currentSlideIndex, slides.length]);
+  }, [isPlaying, currentSlideIndex, slides.length, zoomIn, zoomOut, zoomReset]);
 
   const handleAddSlide = () => {
     // Shouldnt be possible, BUT, If no slides exist, create a default slide with the default code
@@ -262,15 +367,90 @@ export default function CodeAnimationSlides() {
     }
   };
 
+  /**
+   * Export the whole slideshow as a video by re-rendering the magic-move onto a
+   * canvas (no screen capture, no cursor, no permission prompt) and encoding it
+   * frame-perfect to MP4 via WebCodecs (WebM fallback). The exported video is
+   * independent of the live view — it tokenizes the slides directly.
+   */
+  const handleExportVideo = async () => {
+    if (isExporting || slides.length === 0) return;
+    setIsExporting(true);
+    const toastId = toast.loading("Preparing video…");
+    try {
+      const [{ getHighlighter, SHIKI_LANG, SHIKI_THEME }, compose] =
+        await Promise.all([
+          import("./shiki-highlighter"),
+          import("../lib/compose-video"),
+        ]);
+      const highlighter = await getHighlighter();
+
+      const result = await compose.composeSlidesVideo({
+        highlighter,
+        // Normalize tabs the same way the editor does.
+        codes: slides.map((s) => s.code.replace(/\t/g, "  ")),
+        lang: SHIKI_LANG,
+        theme: SHIKI_THEME,
+        onProgress: (ratio) =>
+          toast.loading(`Rendering video… ${Math.round(ratio * 100)}%`, {
+            id: toastId,
+          }),
+      });
+
+      compose.downloadBlob(result.blob, `nin-animate.${result.ext}`);
+      toast.success(`Saved nin-animate.${result.ext}`, { id: toastId });
+    } catch (err) {
+      console.error(err);
+      toast.error("Video export failed.", { id: toastId });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col w-full h-screen bg-gray-900 text-white">
       <header className="flex items-center justify-between p-4 bg-gray-800 border-b border-gray-700">
         <h1 className="text-xl font-bold">Nin-Animate</h1>
         <div className="flex items-center space-x-4">
+          {/* Zoom controls */}
+          <div className="flex items-center gap-1 rounded-md border border-gray-600 px-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={zoomOut}
+              disabled={isExporting || fontSizePx <= FONT_MIN}
+              title="Zoom out (Ctrl/Cmd -)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </Button>
+            <span className="w-10 select-none text-center text-xs tabular-nums">
+              {zoomPercent}%
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={zoomIn}
+              disabled={isExporting || fontSizePx >= FONT_MAX}
+              title="Zoom in (Ctrl/Cmd +)"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={zoomReset}
+              disabled={isExporting}
+              title="Reset zoom (Ctrl/Cmd 0)"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </Button>
+          </div>
+
           <Button
             className="bg-primary"
             variant="outline"
             size="sm"
+            disabled={isExporting}
             onClick={() => document.getElementById("import-slides")?.click()}
           >
             <Upload className="w-4 h-4 mr-2" />
@@ -280,10 +460,22 @@ export default function CodeAnimationSlides() {
             className="bg-primary"
             variant="outline"
             size="sm"
+            disabled={isExporting}
             onClick={exportSlides}
           >
             <Download className="w-4 h-4 mr-2" />
             Export
+          </Button>
+          <Button
+            className="bg-primary"
+            variant="outline"
+            size="sm"
+            disabled={isExporting || slides.length === 0}
+            onClick={handleExportVideo}
+            title="Export the slideshow as a video (MP4)"
+          >
+            <Video className="w-4 h-4 mr-2" />
+            {isExporting ? "Exporting…" : "Export Video"}
           </Button>
         </div>
       </header>
@@ -306,17 +498,14 @@ export default function CodeAnimationSlides() {
           onReorderSlides={handleReorderSlides}
         />
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-hidden p-4">
+          <div ref={codeAreaRef} className="flex-1 overflow-hidden p-4">
             {currentSlide ? (
               <CodeEditor
                 code={currentSlide.code}
                 language={currentSlide.language}
                 onChange={handleCodeChange}
-                nextCode={nextSlide?.code}
-                currentStep={0}
-                totalSteps={1}
-                onStepComplete={() => {}}
-                enableDoubleClickEdit={!isPlaying}
+                enableDoubleClickEdit={!isPlaying && !isExporting}
+                fontSizePx={fontSizePx}
               />
             ) : (
               <div className="flex items-center justify-center h-full">
@@ -337,7 +526,7 @@ export default function CodeAnimationSlides() {
               variant="ghost"
               size="icon"
               onClick={handlePlayPause}
-              disabled={slides.length <= 1}
+              disabled={slides.length <= 1 || isExporting}
             >
               {isPlaying ? (
                 <Pause className="w-5 h-5" />
@@ -368,7 +557,9 @@ export default function CodeAnimationSlides() {
                 variant="ghost"
                 size="sm"
                 onClick={handlePrevSlide}
-                disabled={currentSlideIndex === 0 || slides.length === 0}
+                disabled={
+                  currentSlideIndex === 0 || slides.length === 0 || isExporting
+                }
               >
                 <ChevronLeft className="w-4 h-4 mr-1" />
                 Previous
@@ -378,7 +569,9 @@ export default function CodeAnimationSlides() {
                 size="sm"
                 onClick={handleNextSlide}
                 disabled={
-                  currentSlideIndex >= slides.length - 1 || slides.length === 0
+                  currentSlideIndex >= slides.length - 1 ||
+                  slides.length === 0 ||
+                  isExporting
                 }
               >
                 Next
@@ -394,7 +587,7 @@ export default function CodeAnimationSlides() {
             min={0}
             max={Math.max(0, slides.length - 1)}
             step={1}
-            disabled={slides.length <= 1}
+            disabled={slides.length <= 1 || isExporting}
             onValueChange={(value) => {
               if (slides.length > 0) {
                 setIsPlaying(false);

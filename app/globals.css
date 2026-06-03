@@ -82,13 +82,11 @@
   -moz-tab-size: 2 !important;
   -o-tab-size: 2 !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.875rem;
+  /* Inherit so the inline font-size set by the zoom controls (on the editor's
+     outer div) wins and cascades into the shiki-magic-move container and the
+     edit-mode textarea. */
+  font-size: inherit;
   line-height: 1.5;
-}
-
-/* Ensure consistent whitespace rendering */
-.whitespace-pre {
-  white-space: pre;
 }
 
 /* Improve code editor appearance */
@@ -110,113 +108,14 @@ code {
   -o-tab-size: 2 !important;
 }
 
-/* Improve typing animation appearance */
-.modified-line {
-  position: relative;
-}
-
-.modified-line::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background-color: rgba(59, 130, 246, 0.5);
-}
-
-/* Prism.js theme customization */
-code[class*="language-"],
-pre[class*="language-"] {
-  color: #f8f8f2;
-  background: none;
-  text-shadow: 0 1px rgba(0, 0, 0, 0.3);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.875rem;
-  text-align: left;
-  white-space: pre;
-  word-spacing: normal;
-  word-break: normal;
-  word-wrap: normal;
-  line-height: 1.5;
-  tab-size: 2;
-  -moz-tab-size: 2;
-  -o-tab-size: 2;
-  hyphens: none;
-}
-
-.token.comment,
-.token.prolog,
-.token.doctype,
-.token.cdata {
-  color: #8292a2;
-}
-
-.token.punctuation {
-  color: #f8f8f2;
-}
-
-.token.namespace {
-  opacity: 0.7;
-}
-
-.token.property,
-.token.tag,
-.token.constant,
-.token.symbol,
-.token.deleted {
-  color: #f92672;
-}
-
-.token.boolean,
-.token.number {
-  color: #ae81ff;
-}
-
-.token.selector,
-.token.attr-name,
-.token.string,
-.token.char,
-.token.builtin,
-.token.inserted {
-  color: #a6e22e;
-}
-
-.token.operator,
-.token.entity,
-.token.url,
-.language-css .token.string,
-.style .token.string,
-.token.variable {
-  color: #f8f8f2;
-}
-
-.token.atrule,
-.token.attr-value,
-.token.function,
-.token.class-name {
-  color: #e6db74;
-}
-
-.token.keyword {
-  color: #66d9ef;
-}
-
-.token.regex,
-.token.important {
-  color: #fd971f;
-}
-
-.token.important,
-.token.bold {
-  font-weight: bold;
-}
-
-.token.italic {
-  font-style: italic;
-}
-
-.token.entity {
-  cursor: help;
+/*
+ * shiki-magic-move renders a <pre class="shiki-magic-move-container">. Token
+ * colors come from inline styles set by Shiki (monokai), so we only need to
+ * keep the container transparent and margin-free so it blends with the
+ * surrounding gray-950 chrome instead of painting the theme background.
+ */
+.shiki-magic-move-container {
+  margin: 0;
+  background: transparent !important;
 }
 
