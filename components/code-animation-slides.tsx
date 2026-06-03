@@ -12,6 +12,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Settings,
   Upload,
   Video,
   ZoomIn,
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { Toaster, toast } from "sonner";
 import SlidePanel from "./slide-panel";
 
 // Load the editor client-side only. It pulls in Shiki (and its ESM-only
@@ -48,6 +49,42 @@ const FONT_STEP = 0.1; // 10% per click / wheel notch
 const FONT_STORAGE_KEY = "ninanimate-fontsize";
 const clampFont = (px: number) =>
   Math.round(Math.max(FONT_MIN, Math.min(FONT_MAX, px)));
+
+// User-tunable settings for the composed video export.
+type ExportSettings = {
+  paddingPx: number;
+  holdMs: number;
+  transitionMs: number;
+  fps: number;
+};
+const EXPORT_SETTINGS_KEY = "ninanimate-export-settings";
+const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
+  paddingPx: 72,
+  holdMs: 1400,
+  transitionMs: 900,
+  fps: 30,
+};
+
+/** One labeled row in the export-settings panel. */
+function SettingRow({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-gray-300">{label}</span>
+        <span className="text-xs tabular-nums text-gray-400">{value}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 // Default TypeScript code for new slides when no slides exist
 const DEFAULT_TS_CODE = `// TypeScript Example
@@ -120,9 +157,34 @@ export default function CodeAnimationSlides() {
 
   // --- Video export (composed on a canvas, not a screen recording) ---
   const [isExporting, setIsExporting] = useState(false);
+  const [showExportSettings, setShowExportSettings] = useState(false);
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = window.localStorage.getItem(EXPORT_SETTINGS_KEY);
+        if (saved)
+          return { ...DEFAULT_EXPORT_SETTINGS, ...JSON.parse(saved) };
+      } catch {
+        // ignore malformed storage
+      }
+    }
+    return DEFAULT_EXPORT_SETTINGS;
+  });
+  const setSetting = <K extends keyof ExportSettings>(
+    key: K,
+    val: ExportSettings[K]
+  ) => setExportSettings((s) => ({ ...s, [key]: val }));
 
   // Code area ref — surface for the Ctrl/Cmd + wheel zoom listener.
   const codeAreaRef = useRef<HTMLDivElement>(null);
+
+  // Persist export settings across reloads.
+  useEffect(() => {
+    window.localStorage.setItem(
+      EXPORT_SETTINGS_KEY,
+      JSON.stringify(exportSettings)
+    );
+  }, [exportSettings]);
 
   const exportSlides = () => {
     const dataStr = JSON.stringify(slides, null, 2);
@@ -391,6 +453,10 @@ export default function CodeAnimationSlides() {
         codes: slides.map((s) => s.code.replace(/\t/g, "  ")),
         lang: SHIKI_LANG,
         theme: SHIKI_THEME,
+        paddingPx: exportSettings.paddingPx,
+        holdMs: exportSettings.holdMs,
+        transitionMs: exportSettings.transitionMs,
+        fps: exportSettings.fps,
         onProgress: (ratio) =>
           toast.loading(`Rendering video… ${Math.round(ratio * 100)}%`, {
             id: toastId,
@@ -466,17 +532,128 @@ export default function CodeAnimationSlides() {
             <Download className="w-4 h-4 mr-2" />
             Export
           </Button>
-          <Button
-            className="bg-primary"
-            variant="outline"
-            size="sm"
-            disabled={isExporting || slides.length === 0}
-            onClick={handleExportVideo}
-            title="Export the slideshow as a video (MP4)"
-          >
-            <Video className="w-4 h-4 mr-2" />
-            {isExporting ? "Exporting…" : "Export Video"}
-          </Button>
+          <div className="relative flex items-center gap-2">
+            <Button
+              className="bg-primary"
+              variant="outline"
+              size="sm"
+              disabled={isExporting || slides.length === 0}
+              onClick={handleExportVideo}
+              title="Export the slideshow as a video (MP4)"
+            >
+              <Video className="w-4 h-4 mr-2" />
+              {isExporting ? "Exporting…" : "Export Video"}
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              disabled={isExporting}
+              onClick={() => setShowExportSettings((v) => !v)}
+              title="Export settings"
+              aria-expanded={showExportSettings}
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+
+            {showExportSettings && (
+              <>
+                {/* click-away backdrop */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowExportSettings(false)}
+                />
+                <div className="absolute right-0 top-full z-50 mt-2 w-72 space-y-4 rounded-md border border-gray-700 bg-gray-800 p-4 shadow-xl">
+                  <p className="text-sm font-semibold">Export settings</p>
+
+                  <SettingRow
+                    label="Padding"
+                    value={`${exportSettings.paddingPx}px`}
+                  >
+                    <Slider
+                      aria-label="Padding"
+                      min={0}
+                      max={160}
+                      step={4}
+                      value={[exportSettings.paddingPx]}
+                      onValueChange={([v]) => setSetting("paddingPx", v)}
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Hold per slide"
+                    value={`${(exportSettings.holdMs / 1000).toFixed(1)}s`}
+                  >
+                    <Slider
+                      aria-label="Hold per slide"
+                      min={400}
+                      max={4000}
+                      step={100}
+                      value={[exportSettings.holdMs]}
+                      onValueChange={([v]) => setSetting("holdMs", v)}
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Transition"
+                    value={`${(exportSettings.transitionMs / 1000).toFixed(1)}s`}
+                  >
+                    <Slider
+                      aria-label="Transition"
+                      min={300}
+                      max={2500}
+                      step={100}
+                      value={[exportSettings.transitionMs]}
+                      onValueChange={([v]) => setSetting("transitionMs", v)}
+                    />
+                  </SettingRow>
+
+                  <SettingRow
+                    label="Frame rate"
+                    value={`${exportSettings.fps} fps`}
+                  >
+                    <div className="flex gap-2">
+                      {[24, 30, 60].map((f) => (
+                        <Button
+                          key={f}
+                          size="sm"
+                          variant={
+                            exportSettings.fps === f ? "default" : "outline"
+                          }
+                          className="flex-1"
+                          onClick={() => setSetting("fps", f)}
+                        >
+                          {f}
+                        </Button>
+                      ))}
+                    </div>
+                  </SettingRow>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setExportSettings(DEFAULT_EXPORT_SETTINGS)
+                      }
+                    >
+                      Reset
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={isExporting || slides.length === 0}
+                      onClick={() => {
+                        setShowExportSettings(false);
+                        handleExportVideo();
+                      }}
+                    >
+                      <Video className="mr-2 h-4 w-4" />
+                      Render
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </header>
       <input
@@ -597,6 +774,8 @@ export default function CodeAnimationSlides() {
           />
         </div>
       </div>
+
+      <Toaster theme="dark" position="bottom-right" richColors />
     </div>
   );
 }

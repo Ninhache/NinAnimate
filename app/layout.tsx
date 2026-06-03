@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Toaster } from "sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,12 +11,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Keep the root layout free of client components: a client/ESM reference here
+  // lands in every page's graph — including the auto-generated /_not-found —
+  // which makes the static export worker flakily fail ("e[o] is not a
+  // function"). The Toaster is rendered inside the client page tree instead.
   return (
     <html lang="en">
-      <body>
-        {children}
-        <Toaster theme="dark" position="bottom-right" richColors />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

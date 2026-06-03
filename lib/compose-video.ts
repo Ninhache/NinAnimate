@@ -29,7 +29,8 @@ const TARGET_W = 1280;
 const TARGET_H = 720;
 const FONT_MIN = 16;
 const FONT_MAX = 56;
-const PAD = 36;
+// Breathing room (px) between the code and the edges of the video frame.
+const DEFAULT_PAD = 72;
 
 export type ComposeOptions = {
   highlighter: HighlighterCore;
@@ -39,6 +40,8 @@ export type ComposeOptions = {
   fps?: number;
   holdMs?: number;
   transitionMs?: number;
+  /** Padding (px) around the code inside the video frame. Default 72. */
+  paddingPx?: number;
   onProgress?: (ratio: number) => void;
 };
 
@@ -91,7 +94,8 @@ function placeTokens(
   info: { tokens: ReadonlyArray<{ content: string; offset: number; color?: string; fontStyle?: number; key: string }>; fg?: string },
   code: string,
   charW: number,
-  lineH: number
+  lineH: number,
+  pad: number
 ): PlacedToken[] {
   const starts = lineStarts(code);
   const placed: PlacedToken[] = [];
@@ -110,8 +114,8 @@ function placeTokens(
       key: t.key,
       content: t.content,
       color: t.color || info.fg || "#f8f8f2",
-      x: PAD + col * charW,
-      y: PAD + lo * lineH,
+      x: pad + col * charW,
+      y: pad + lo * lineH,
       // shiki FontStyle bitmask: Italic=1, Bold=2.
       bold: !!(t.fontStyle && t.fontStyle & 2),
       italic: !!(t.fontStyle && t.fontStyle & 1),
@@ -126,7 +130,7 @@ function placeTokens(
  * WebCodecs and MediaRecorder paths.
  */
 function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
-  const { highlighter, codes, lang, theme } = opts;
+  const { highlighter, codes, lang, theme, paddingPx: pad } = opts;
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -137,8 +141,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
   const charRatio = ctx.measureText("M").width / 100;
 
   const { maxLines, maxCols } = measure(codes);
-  const fitH = (TARGET_H - 2 * PAD) / (maxLines * LINE_HEIGHT);
-  const fitW = (TARGET_W - 2 * PAD) / (maxCols * charRatio);
+  const fitH = (TARGET_H - 2 * pad) / (maxLines * LINE_HEIGHT);
+  const fitW = (TARGET_W - 2 * pad) / (maxCols * charRatio);
   const fontPx = Math.max(
     FONT_MIN,
     Math.min(FONT_MAX, Math.floor(Math.min(fitH, fitW)))
@@ -147,8 +151,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
   const lineH = LINE_HEIGHT * fontPx;
 
   // Tight canvas sized to the largest slide; even dimensions for H.264.
-  let W = Math.min(TARGET_W, Math.ceil(maxCols * charW + 2 * PAD));
-  let H = Math.min(TARGET_H, Math.ceil(maxLines * lineH + 2 * PAD));
+  let W = Math.min(TARGET_W, Math.ceil(maxCols * charW + 2 * pad));
+  let H = Math.min(TARGET_H, Math.ceil(maxLines * lineH + 2 * pad));
   W += W % 2;
   H += H % 2;
   canvas.width = W;
@@ -164,7 +168,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
       codeToKeyedTokens(highlighter as never, code, tokenOpts) as never,
       code,
       charW,
-      lineH
+      lineH,
+      pad
     )
   );
 
@@ -175,8 +180,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
     const b = codeToKeyedTokens(highlighter as never, codes[i], tokenOpts);
     const synced = syncTokenKeys(a, b);
     transitions.push({
-      from: placeTokens(synced.from as never, codes[i - 1], charW, lineH),
-      to: placeTokens(synced.to as never, codes[i], charW, lineH),
+      from: placeTokens(synced.from as never, codes[i - 1], charW, lineH, pad),
+      to: placeTokens(synced.to as never, codes[i], charW, lineH, pad),
     });
   }
 
@@ -391,6 +396,7 @@ export async function composeSlidesVideo(
     fps: 30,
     holdMs: 1400,
     transitionMs: 900,
+    paddingPx: DEFAULT_PAD,
     ...options,
   } as Required<Omit<ComposeOptions, "onProgress">> & {
     onProgress?: (ratio: number) => void;
