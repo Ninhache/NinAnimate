@@ -119,3 +119,32 @@ code {
   background: transparent !important;
 }
 
+/* Dark-styled range input for the export-settings panel (the shadcn Slider
+   resolves to the light theme tokens here, which looked washed-out/white). */
+.settings-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: #374151; /* gray-700 */
+  outline: none;
+  cursor: pointer;
+}
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #22d3ee; /* cyan-400 */
+  cursor: pointer;
+}
+.settings-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 9999px;
+  background: #22d3ee; /* cyan-400 */
+  cursor: pointer;
+}
+

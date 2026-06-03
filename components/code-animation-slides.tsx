@@ -50,12 +50,28 @@ const FONT_STORAGE_KEY = "ninanimate-fontsize";
 const clampFont = (px: number) =>
   Math.round(Math.max(FONT_MIN, Math.min(FONT_MAX, px)));
 
+// Resolution presets (frame cap) and quality presets (bitrate) for the export.
+const RESOLUTIONS = {
+  "480p": { w: 854, h: 480 },
+  "720p": { w: 1280, h: 720 },
+  "1080p": { w: 1920, h: 1080 },
+} as const;
+const QUALITY_BITRATE = {
+  Low: 2_000_000,
+  Medium: 6_000_000,
+  High: 12_000_000,
+} as const;
+type Resolution = keyof typeof RESOLUTIONS;
+type Quality = keyof typeof QUALITY_BITRATE;
+
 // User-tunable settings for the composed video export.
 type ExportSettings = {
   paddingPx: number;
   holdMs: number;
   transitionMs: number;
   fps: number;
+  resolution: Resolution;
+  quality: Quality;
 };
 const EXPORT_SETTINGS_KEY = "ninanimate-export-settings";
 const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -63,6 +79,8 @@ const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   holdMs: 1400,
   transitionMs: 900,
   fps: 30,
+  resolution: "720p",
+  quality: "Medium",
 };
 
 /** One labeled row in the export-settings panel. */
@@ -72,16 +90,48 @@ function SettingRow({
   children,
 }: {
   label: string;
-  value: string;
+  value?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-300">{label}</span>
-        <span className="text-xs tabular-nums text-gray-400">{value}</span>
+        {value && (
+          <span className="text-xs tabular-nums text-gray-400">{value}</span>
+        )}
       </div>
       {children}
+    </div>
+  );
+}
+
+/** A dark-styled segmented button group (used for fps / resolution / quality). */
+function Segmented<T extends string | number>({
+  options,
+  value,
+  onChange,
+}: {
+  options: readonly T[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex gap-1.5">
+      {options.map((o) => (
+        <button
+          key={String(o)}
+          type="button"
+          onClick={() => onChange(o)}
+          className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+            value === o
+              ? "bg-cyan-600 text-white"
+              : "bg-gray-700 text-gray-200 hover:bg-gray-600"
+          }`}
+        >
+          {o}
+        </button>
+      ))}
     </div>
   );
 }
@@ -457,6 +507,9 @@ export default function CodeAnimationSlides() {
         holdMs: exportSettings.holdMs,
         transitionMs: exportSettings.transitionMs,
         fps: exportSettings.fps,
+        maxWidth: RESOLUTIONS[exportSettings.resolution].w,
+        maxHeight: RESOLUTIONS[exportSettings.resolution].h,
+        bitrate: QUALITY_BITRATE[exportSettings.quality],
         onProgress: (ratio) =>
           toast.loading(`Rendering video… ${Math.round(ratio * 100)}%`, {
             id: toastId,
@@ -562,20 +615,24 @@ export default function CodeAnimationSlides() {
                   className="fixed inset-0 z-40"
                   onClick={() => setShowExportSettings(false)}
                 />
-                <div className="absolute right-0 top-full z-50 mt-2 w-72 space-y-4 rounded-md border border-gray-700 bg-gray-800 p-4 shadow-xl">
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 space-y-4 rounded-md border border-gray-700 bg-gray-900 p-4 text-gray-100 shadow-xl">
                   <p className="text-sm font-semibold">Export settings</p>
 
                   <SettingRow
                     label="Padding"
                     value={`${exportSettings.paddingPx}px`}
                   >
-                    <Slider
+                    <input
+                      type="range"
                       aria-label="Padding"
+                      className="settings-range w-full"
                       min={0}
-                      max={160}
-                      step={4}
-                      value={[exportSettings.paddingPx]}
-                      onValueChange={([v]) => setSetting("paddingPx", v)}
+                      max={320}
+                      step={8}
+                      value={exportSettings.paddingPx}
+                      onChange={(e) =>
+                        setSetting("paddingPx", Number(e.target.value))
+                      }
                     />
                   </SettingRow>
 
@@ -583,13 +640,17 @@ export default function CodeAnimationSlides() {
                     label="Hold per slide"
                     value={`${(exportSettings.holdMs / 1000).toFixed(1)}s`}
                   >
-                    <Slider
+                    <input
+                      type="range"
                       aria-label="Hold per slide"
+                      className="settings-range w-full"
                       min={400}
-                      max={4000}
+                      max={6000}
                       step={100}
-                      value={[exportSettings.holdMs]}
-                      onValueChange={([v]) => setSetting("holdMs", v)}
+                      value={exportSettings.holdMs}
+                      onChange={(e) =>
+                        setSetting("holdMs", Number(e.target.value))
+                      }
                     />
                   </SettingRow>
 
@@ -597,58 +658,66 @@ export default function CodeAnimationSlides() {
                     label="Transition"
                     value={`${(exportSettings.transitionMs / 1000).toFixed(1)}s`}
                   >
-                    <Slider
+                    <input
+                      type="range"
                       aria-label="Transition"
+                      className="settings-range w-full"
                       min={300}
-                      max={2500}
+                      max={3000}
                       step={100}
-                      value={[exportSettings.transitionMs]}
-                      onValueChange={([v]) => setSetting("transitionMs", v)}
+                      value={exportSettings.transitionMs}
+                      onChange={(e) =>
+                        setSetting("transitionMs", Number(e.target.value))
+                      }
                     />
                   </SettingRow>
 
-                  <SettingRow
-                    label="Frame rate"
-                    value={`${exportSettings.fps} fps`}
-                  >
-                    <div className="flex gap-2">
-                      {[24, 30, 60].map((f) => (
-                        <Button
-                          key={f}
-                          size="sm"
-                          variant={
-                            exportSettings.fps === f ? "default" : "outline"
-                          }
-                          className="flex-1"
-                          onClick={() => setSetting("fps", f)}
-                        >
-                          {f}
-                        </Button>
-                      ))}
-                    </div>
+                  <SettingRow label="Resolution">
+                    <Segmented
+                      options={["480p", "720p", "1080p"] as const}
+                      value={exportSettings.resolution}
+                      onChange={(v) => setSetting("resolution", v)}
+                    />
+                  </SettingRow>
+
+                  <SettingRow label="Quality">
+                    <Segmented
+                      options={["Low", "Medium", "High"] as const}
+                      value={exportSettings.quality}
+                      onChange={(v) => setSetting("quality", v)}
+                    />
+                  </SettingRow>
+
+                  <SettingRow label="Frame rate">
+                    <Segmented
+                      options={[24, 30, 60]}
+                      value={exportSettings.fps}
+                      onChange={(v) => setSetting("fps", v)}
+                    />
                   </SettingRow>
 
                   <div className="flex items-center justify-between pt-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
+                    <button
+                      type="button"
+                      className="text-xs text-gray-400 hover:text-gray-200"
                       onClick={() =>
                         setExportSettings(DEFAULT_EXPORT_SETTINGS)
                       }
                     >
-                      Reset
-                    </Button>
-                    <Button
-                      size="sm"
+                      Reset to defaults
+                    </button>
+                    <button
+                      type="button"
                       disabled={isExporting || slides.length === 0}
+                      className="flex items-center gap-1.5 rounded bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-cyan-500 disabled:opacity-50"
                       onClick={() => {
                         setShowExportSettings(false);
                         handleExportVideo();
                       }}
                     >
-                      <Video className="mr-2 h-4 w-4" />
+                      <Video className="h-4 w-4" />
                       Render
-                    </Button>
+                    </button>
                   </div>
                 </div>
               </>

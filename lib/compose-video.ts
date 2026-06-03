@@ -23,14 +23,27 @@ const FONT_STACK =
 const BG_COLOR = "#030712"; // tailwind gray-950, matches the live preview
 const LINE_HEIGHT = 1.5;
 
-// Framing/quality bounds. Capped to 1280x720 so we can use the universally
-// decodable H.264 baseline level 3.1.
-const TARGET_W = 1280;
-const TARGET_H = 720;
+// Default framing/quality bounds (overridable per export).
+const DEFAULT_MAX_W = 1280;
+const DEFAULT_MAX_H = 720;
+const DEFAULT_BITRATE = 6_000_000;
 const FONT_MIN = 16;
-const FONT_MAX = 56;
+const FONT_MAX = 96;
 // Breathing room (px) between the code and the edges of the video frame.
 const DEFAULT_PAD = 72;
+
+/**
+ * Pick an H.264 codec string whose level covers the frame size, keeping the
+ * Baseline profile (0x42) and only bumping the level. Chrome's software encoder
+ * (openh264) only encodes Constrained Baseline, so a High profile could fail on
+ * machines without hardware encode — the level is what gates resolution anyway.
+ * L3.1 ≤ 720p, L4.0 ≤ 1080p, L5.1 above. All widely decodable.
+ */
+function pickAvcCodec(w: number, h: number): string {
+  if (w <= 1280 && h <= 720) return "avc1.42001f";
+  if (w <= 1920 && h <= 1080) return "avc1.420028";
+  return "avc1.420033";
+}
 
 export type ComposeOptions = {
   highlighter: HighlighterCore;
@@ -42,6 +55,11 @@ export type ComposeOptions = {
   transitionMs?: number;
   /** Padding (px) around the code inside the video frame. Default 72. */
   paddingPx?: number;
+  /** Max frame width/height (px) — the canvas is capped to this. Default 1280x720. */
+  maxWidth?: number;
+  maxHeight?: number;
+  /** Target video bitrate (bits/s). Default 6 Mbps. */
+  bitrate?: number;
   onProgress?: (ratio: number) => void;
 };
 
@@ -131,6 +149,8 @@ function placeTokens(
  */
 function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
   const { highlighter, codes, lang, theme, paddingPx: pad } = opts;
+  const maxW = opts.maxWidth;
+  const maxH = opts.maxHeight;
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -141,8 +161,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
   const charRatio = ctx.measureText("M").width / 100;
 
   const { maxLines, maxCols } = measure(codes);
-  const fitH = (TARGET_H - 2 * pad) / (maxLines * LINE_HEIGHT);
-  const fitW = (TARGET_W - 2 * pad) / (maxCols * charRatio);
+  const fitH = (maxH - 2 * pad) / (maxLines * LINE_HEIGHT);
+  const fitW = (maxW - 2 * pad) / (maxCols * charRatio);
   const fontPx = Math.max(
     FONT_MIN,
     Math.min(FONT_MAX, Math.floor(Math.min(fitH, fitW)))
@@ -151,8 +171,8 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
   const lineH = LINE_HEIGHT * fontPx;
 
   // Tight canvas sized to the largest slide; even dimensions for H.264.
-  let W = Math.min(TARGET_W, Math.ceil(maxCols * charW + 2 * pad));
-  let H = Math.min(TARGET_H, Math.ceil(maxLines * lineH + 2 * pad));
+  let W = Math.min(maxW, Math.ceil(maxCols * charW + 2 * pad));
+  let H = Math.min(maxH, Math.ceil(maxLines * lineH + 2 * pad));
   W += W % 2;
   H += H % 2;
   canvas.width = W;
@@ -274,7 +294,7 @@ function buildScene(opts: Required<Omit<ComposeOptions, "onProgress">>) {
     drawStatic(staticToks[codes.length - 1]);
   };
 
-  return { canvas, drawAt, totalMs, W, H };
+  return { canvas, drawAt, totalMs, W, H, bitrate: opts.bitrate };
 }
 
 /** Encode the scene to MP4 with WebCodecs. */
@@ -283,7 +303,7 @@ async function encodeWithWebCodecs(
   fps: number,
   onProgress?: (ratio: number) => void
 ): Promise<ComposeResult> {
-  const { canvas, drawAt, totalMs, W, H } = scene;
+  const { canvas, drawAt, totalMs, W, H, bitrate } = scene;
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -298,10 +318,10 @@ async function encodeWithWebCodecs(
     },
   });
   encoder.configure({
-    codec: "avc1.42001f", // H.264 baseline level 3.1
+    codec: pickAvcCodec(W, H), // H.264 level sized to the frame
     width: W,
     height: H,
-    bitrate: 6_000_000,
+    bitrate,
     framerate: fps,
     // Emit length-prefixed AVCC (with an avcC/SPS-PPS description in the chunk
     // metadata) instead of Annex-B. mp4-muxer needs AVCC to write a valid track;
@@ -397,6 +417,9 @@ export async function composeSlidesVideo(
     holdMs: 1400,
     transitionMs: 900,
     paddingPx: DEFAULT_PAD,
+    maxWidth: DEFAULT_MAX_W,
+    maxHeight: DEFAULT_MAX_H,
+    bitrate: DEFAULT_BITRATE,
     ...options,
   } as Required<Omit<ComposeOptions, "onProgress">> & {
     onProgress?: (ratio: number) => void;
