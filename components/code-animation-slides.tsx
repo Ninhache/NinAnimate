@@ -598,6 +598,7 @@ export default function CodeAnimationSlides() {
               {isExporting ? "Exporting…" : "Export Video"}
             </Button>
             <Button
+              className="bg-primary"
               variant="outline"
               size="icon"
               disabled={isExporting}
